@@ -1,0 +1,19 @@
+# Binaries
+voiceline-mvp
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Temporäre Dateien und Ordner
+/tmp/
+*.m4a
+*.mp3
+*.wav
+
+# Environment Variables (SEHR WICHTIG!)
+.env
+
+# Go workspace
+go.work
