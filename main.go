@@ -10,37 +10,36 @@ import (
 )
 
 func main() {
-	// 1. Umgebungsvariablen aus der .env Datei laden
+	// 1. Load environment variables from the .env file
 	err := godotenv.Load()
 	if err != nil {
-		log.Println("Warnung: Keine .env Datei gefunden, nutze System-Umgebungsvariablen")
+		log.Println("Warning: No .env file found, falling back to system environment variables")
 	}
 
-	// 2. Prüfen, ob die wichtigsten Keys da sind (Fail Fast)
+	// 2. Fail-fast check to ensure critical API keys are present before starting
 	if os.Getenv("OPENAI_API_KEY") == "" || os.Getenv("HUBSPOT_TOKEN") == "" {
-		log.Fatal("KRITISCHER FEHLER: OPENAI_API_KEY oder HUBSPOT_TOKEN fehlen in der .env")
+		log.Fatal("CRITICAL ERROR: OPENAI_API_KEY or HUBSPOT_TOKEN is missing in the environment")
 	}
 
-	// 3. Gin Router im Standard-Modus initialisieren
+	// 3. Initialize the Gin router with default middleware (logger and recovery)
 	router := gin.Default()
 
-	// 4. Einen simplen Health-Check Endpunkt (gut fürs Debugging)
+	// 4. Simple health-check endpoint (useful for debugging and deployment readiness)
 	router.GET("/ping", func(c *gin.Context) {
 		c.JSON(200, gin.H{
-			"message": "pong - Server läuft!",
+			"message": "pong - Server is running!",
 		})
 	})
 
-	// 5. Hier kommt später unsere Haupt-Route für den Audio-Upload hin
-	// router.POST("/api/v1/note", handlers.HandleAudioUpload)
+	// 5. Main endpoint for the audio-to-CRM pipeline
 	router.POST("/api/v1/note", handlers.HandleAudioUpload)
 
-	// 6. Server starten
+	// 6. Define the port and start the HTTP server
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
-	log.Printf("Server startet auf Port %s...", port)
+	log.Printf("Server is starting on port %s...", port)
 	router.Run(":" + port)
 }

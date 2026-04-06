@@ -9,77 +9,80 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"voiceline-mvp/models" // Passe den Modulnamen an, falls abweichend
+	"time"
+	"voiceline-mvp/models" // Adjust the import path if necessary
 )
 
-// TranscribeAudio nimmt den Dateipfad und schickt die Datei an die Whisper API
+// TranscribeAudio takes a local file path and sends the audio file to the OpenAI Whisper API.
+// It returns the transcribed text as a string.
 func TranscribeAudio(filePath string) (string, error) {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
-		return "", fmt.Errorf("OPENAI_API_KEY ist nicht gesetzt")
+		return "", fmt.Errorf("OPENAI_API_KEY is not set in the environment")
 	}
 
-	// 1. Die lokale Datei öffnen
+	// 1. Open the local audio file
 	file, err := os.Open(filePath)
 	if err != nil {
-		return "", fmt.Errorf("fehler beim Öffnen der Audiodatei: %w", err)
+		return "", fmt.Errorf("error opening audio file: %w", err)
 	}
 	defer file.Close()
 
-	// 2. Einen Multipart-Body aufbauen (wie in Postman)
+	// 2. Construct a multipart/form-data body (similar to how Postman handles file uploads)
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 
-	// Das Feld für die Datei hinzufügen ("file" ist der von OpenAI erwartete Name)
+	// Add the file field ("file" is the exact key expected by OpenAI)
 	part, err := writer.CreateFormFile("file", filepath.Base(filePath))
 	if err != nil {
-		return "", fmt.Errorf("fehler beim Erstellen des FormFiles: %w", err)
+		return "", fmt.Errorf("error creating form file: %w", err)
 	}
 	io.Copy(part, file)
 
-	// Das Feld für das Modell hinzufügen (wir nutzen "whisper-1")
+	// Add the model field (we use the standard "whisper-1" model)
 	writer.WriteField("model", "whisper-1")
 
-	// Wichtig: Den Writer schließen, damit der abschließende Boundary geschrieben wird
+	// Important: Close the writer before creating the request to ensure the terminating boundary is written
 	writer.Close()
 
-	// 3. Den HTTP-Request an OpenAI vorbereiten
+	// 3. Prepare the HTTP POST request to OpenAI
 	req, err := http.NewRequest("POST", "https://api.openai.com/v1/audio/transcriptions", body)
 	if err != nil {
-		return "", fmt.Errorf("fehler beim Erstellen des Requests: %w", err)
+		return "", fmt.Errorf("error creating HTTP request: %w", err)
 	}
 
-	// Header setzen (Auth und Content-Type inklusive der generierten Boundary)
+	// Set headers (Auth and Content-Type, which includes the auto-generated boundary)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	// 4. Request absenden
+	// 4. Execute the request
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("fehler beim API-Call zu OpenAI: %w", err)
+		return "", fmt.Errorf("error executing OpenAI API call: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		// Fehler auslesen, falls OpenAI meckert
+		// Read the error body if OpenAI rejects the request (e.g., file too large, invalid format)
 		respBody, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("openai fehler (Status %d): %s", resp.StatusCode, string(respBody))
+		return "", fmt.Errorf("openai error (Status %d): %s", resp.StatusCode, string(respBody))
 	}
 
-	// 5. Antwort in unser Struct entpacken
+	// 5. Decode the successful JSON response into our WhisperResponse struct
 	var whisperResp models.WhisperResponse
 	if err := json.NewDecoder(resp.Body).Decode(&whisperResp); err != nil {
-		return "", fmt.Errorf("fehler beim Dekodieren der Antwort: %w", err)
+		return "", fmt.Errorf("error decoding OpenAI response: %w", err)
 	}
 
 	return whisperResp.Text, nil
-
 }
 
-// ... (bestehender Code von TranscribeAudio) ...
+// ==========================================
+// Helper structs for the GPT-4o API request
+// These are used internally in this service and don't need to be exported to the models package
+// ==========================================
 
-// Hilfs-Structs für den Request an GPT-4o (nur intern im Service genutzt)
 type chatRequest struct {
 	Model          string         `json:"model"`
 	ResponseFormat map[string]any `json:"response_format"`
@@ -100,27 +103,49 @@ type chatResponse struct {
 	} `json:"choices"`
 }
 
-// ExtractData nimmt den Rohtext und extrahiert Zusammenfassung und To-dos via GPT-4o
+// ExtractData takes the raw transcript and uses GPT-4o to extract a summary, tasks, and CRM property updates.
+// It forces the AI to return a strict JSON structure mapped to our models.OpenAIResponse.
 func ExtractData(transcript string) (models.OpenAIResponse, error) {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	var result models.OpenAIResponse
 
-	systemPrompt := `Du bist ein hochpräziser KI-Assistent für Vertriebsmitarbeiter im Außendienst. 
-Deine Aufgabe ist es, das unstrukturierte Transkript einer Sprachnotiz nach einem Kundentermin zu analysieren und die wichtigsten Informationen zu extrahieren.
-Analysiere den Text und extrahiere:
-1. Eine professionelle, kompakte Zusammenfassung.
-2. Eine präzise Liste aller To-dos.
+	// 1. Fetch the current date dynamically.
+	// This is crucial to give the LLM an anchor point for calculating relative dates (e.g., "next week").
+	today := time.Now().Format("2006-01-02")
 
-WICHTIG: Antworte AUSSCHLIESSLICH mit einem validen JSON-Objekt.
-Struktur: {"summary": "...", "todos": ["...", "..."]}`
+	// 2. Inject the dynamic date into the system prompt using fmt.Sprintf
+	systemPrompt := fmt.Sprintf(`You are a highly precise AI assistant for field sales representatives. 
+IMPORTANT: Today's date is %s.
 
-	// 1. Request-Payload zusammenbauen
+LANGUAGE INSTRUCTION: 
+Always use the SAME LANGUAGE for the 'title', 'summary', and 'tasks' as the provided transcript. 
+E.g. if the user speaks German, respond in German. If the user speaks English, respond in English.
+
+Analyze the transcript and extract the following:
+1. 'title': A short, professional headline for this note (e.g., "Meeting Report: New Logistics Center" or "Update: Project Eco-Cool").
+2. 'summary': A compact summary of the meeting.
+3. 'tasks': A list of all action items/to-dos. Each task is an object with 'title' (short description) and 'due_date' (in YYYY-MM-DD format). You MUST calculate relative time references (like "tomorrow" or "next Friday") based on today's date (%s). If no timeframe is mentioned, set the due_date to today.
+4. 'contact_updates': 
+- 'lead_status': You MUST choose exactly one of these values: "NEW", "OPEN", "IN_PROGRESS", "OPEN_DEAL", or "UNQUALIFIED". (Use "OPEN_DEAL" for highly interested contacts).
+- 'lifecycle_stage': You MUST choose "lead", "salesqualifiedlead", or "opportunity".
+- 'revenue': Extract any mentioned budget or revenue strictly as a text string (e.g., "150000"). If nothing is mentioned, return an empty string "". IMPORTANT: This value must be wrapped in quotes in the JSON, NOT a raw number!
+- 'industry': Extract the mentioned industry (e.g., "E-Commerce", "Logistics").
+
+IMPORTANT: You must respond EXCLUSIVELY with a valid JSON object matching this exact structure:
+{
+  "title": "...",
+  "summary": "...",
+  "tasks": [{"title": "...", "due_date": "2026-04-10"}],
+  "contact_updates": {"lead_status": "OPEN", "lifecycle_stage": "lead", "revenue": "150000", "industry": "Logistics"}
+}`, today, today)
+
+	// 3. Build the request payload
 	reqBody := chatRequest{
 		Model: "gpt-4o",
 		ResponseFormat: map[string]any{
-			"type": "json_object", // Zwingt die KI, nur JSON zurückzugeben
+			"type": "json_object", // Force the model into JSON mode to guarantee parseable output
 		},
-		Temperature: 0.2, // Niedrige Temperatur für sachliche Extraktion
+		Temperature: 0.2, // Low temperature ensures factual, deterministic extraction rather than creative writing
 		Messages: []chatMessage{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: transcript},
@@ -129,13 +154,13 @@ Struktur: {"summary": "...", "todos": ["...", "..."]}`
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		return result, fmt.Errorf("fehler beim Erstellen des JSON-Bodys: %w", err)
+		return result, fmt.Errorf("error marshaling JSON body: %w", err)
 	}
 
-	// 2. HTTP Request an OpenAI Chat Completions senden
+	// 4. Send the HTTP POST request to the OpenAI Chat Completions endpoint
 	req, err := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return result, fmt.Errorf("fehler beim Erstellen des Requests: %w", err)
+		return result, fmt.Errorf("error creating HTTP request: %w", err)
 	}
 
 	req.Header.Set("Authorization", "Bearer "+apiKey)
@@ -144,28 +169,28 @@ Struktur: {"summary": "...", "todos": ["...", "..."]}`
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return result, fmt.Errorf("fehler beim API-Call zu OpenAI: %w", err)
+		return result, fmt.Errorf("error executing OpenAI API call: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return result, fmt.Errorf("openai fehler: Status %d", resp.StatusCode)
+		return result, fmt.Errorf("openai error: Status %d", resp.StatusCode)
 	}
 
-	// 3. Antwort dekodieren
+	// 5. Decode the API response wrapper
 	var apiResponse chatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&apiResponse); err != nil {
-		return result, fmt.Errorf("fehler beim Dekodieren der Antwort: %w", err)
+		return result, fmt.Errorf("error decoding API response: %w", err)
 	}
 
 	if len(apiResponse.Choices) == 0 {
-		return result, fmt.Errorf("openai hat keine Antwort generiert")
+		return result, fmt.Errorf("openai did not generate a response")
 	}
 
-	// 4. Den JSON-String, den die KI generiert hat, in unser finales Struct umwandeln
+	// 6. Extract the actual JSON string generated by the AI and unmarshal it into our Go struct
 	contentString := apiResponse.Choices[0].Message.Content
 	if err := json.Unmarshal([]byte(contentString), &result); err != nil {
-		return result, fmt.Errorf("fehler beim Entpacken des KI-JSONs: %w", err)
+		return result, fmt.Errorf("error unmarshaling the AI-generated JSON into Go struct: %w", err)
 	}
 
 	return result, nil
