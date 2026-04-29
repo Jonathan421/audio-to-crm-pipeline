@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,7 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-	"voiceline-mvp/models" // Adjust the import path if necessary
+	"voiceline-mvp/models"
 )
 
 // TranscribeAudio takes a local file path and sends the audio file to the OpenAI Whisper API.
@@ -28,7 +29,7 @@ func TranscribeAudio(filePath string) (string, error) {
 	}
 	defer file.Close()
 
-	// 2. Construct a multipart/form-data body (similar to how Postman handles file uploads)
+	// 2. Construct a multipart/form-data body
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 
@@ -39,7 +40,7 @@ func TranscribeAudio(filePath string) (string, error) {
 	}
 	io.Copy(part, file)
 
-	// Add the model field (we use the standard "whisper-1" model)
+	// Add the model field
 	writer.WriteField("model", "whisper-1")
 
 	// Important: Close the writer before creating the request to ensure the terminating boundary is written
@@ -103,6 +104,9 @@ type chatResponse struct {
 	} `json:"choices"`
 }
 
+//go:embed system_prompt.txt
+var systemPromptTemplate string
+
 // ExtractData takes the raw transcript and uses GPT-4o to extract a summary, tasks, and CRM property updates.
 // It forces the AI to return a strict JSON structure mapped to our models.OpenAIResponse.
 func ExtractData(transcript string) (models.OpenAIResponse, error) {
@@ -114,30 +118,7 @@ func ExtractData(transcript string) (models.OpenAIResponse, error) {
 	today := time.Now().Format("2006-01-02")
 
 	// 2. Inject the dynamic date into the system prompt using fmt.Sprintf
-	systemPrompt := fmt.Sprintf(`You are a highly precise AI assistant for field sales representatives. 
-IMPORTANT: Today's date is %s.
-
-LANGUAGE INSTRUCTION: 
-Always use the SAME LANGUAGE for the 'title', 'summary', and 'tasks' as the provided transcript. 
-E.g. if the user speaks German, respond in German. If the user speaks English, respond in English.
-
-Analyze the transcript and extract the following:
-1. 'title': A short, professional headline for this note (e.g., "Meeting Report: New Logistics Center" or "Update: Project Eco-Cool").
-2. 'summary': A compact summary of the meeting.
-3. 'tasks': A list of all action items/to-dos. Each task is an object with 'title' (short description) and 'due_date' (in YYYY-MM-DD format). You MUST calculate relative time references (like "tomorrow" or "next Friday") based on today's date (%s). If no timeframe is mentioned, set the due_date to today.
-4. 'contact_updates': 
-- 'lead_status': You MUST choose exactly one of these values: "NEW", "OPEN", "IN_PROGRESS", "OPEN_DEAL", or "UNQUALIFIED". (Use "OPEN_DEAL" for highly interested contacts).
-- 'lifecycle_stage': You MUST choose "lead", "salesqualifiedlead", or "opportunity".
-- 'revenue': Extract any mentioned budget or revenue strictly as a text string (e.g., "150000"). If nothing is mentioned, return an empty string "". IMPORTANT: This value must be wrapped in quotes in the JSON, NOT a raw number!
-- 'industry': Extract the mentioned industry (e.g., "E-Commerce", "Logistics").
-
-IMPORTANT: You must respond EXCLUSIVELY with a valid JSON object matching this exact structure:
-{
-  "title": "...",
-  "summary": "...",
-  "tasks": [{"title": "...", "due_date": "2026-04-10"}],
-  "contact_updates": {"lead_status": "OPEN", "lifecycle_stage": "lead", "revenue": "150000", "industry": "Logistics"}
-}`, today, today)
+	systemPrompt := fmt.Sprintf(systemPromptTemplate, today, today)
 
 	// 3. Build the request payload
 	reqBody := chatRequest{

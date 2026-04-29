@@ -24,3 +24,8 @@ PORT=8080
 OPENAI_API_KEY=sk-YourOpenAIKey
 HUBSPOT_TOKEN=pat-na1-YourHubSpotToken
 HUBSPOT_CONTACT_ID=YourTargetContactID
+```
+
+```
+curl -X POST http://localhost:8080/api/v1/note -F "audio=@audio_inputs/test_audio.m4a"
+```

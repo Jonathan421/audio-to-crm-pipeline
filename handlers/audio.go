@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-	"voiceline-mvp/services" // Adjust the module path if necessary
+	"voiceline-mvp/services"
 
 	"github.com/gin-gonic/gin"
 )
@@ -85,7 +85,6 @@ func HandleAudioUpload(c *gin.Context) {
 	}
 
 	// 3C: Patch the Contact Properties (Only if the AI extracted relevant data)
-	// We check LeadStatus as an indicator, but the UpdateContact service handles empty fields safely
 	if structuredData.ContactUpdates.LeadStatus != "" {
 		if err := services.UpdateContact(structuredData.ContactUpdates); err != nil {
 			fmt.Println("HubSpot Contact Update Error:", err)

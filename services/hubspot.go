@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"os"
 	"time"
-	"voiceline-mvp/models" // Adjust the import path if necessary
+	"voiceline-mvp/models"
 )
 
 // CreateNote sends the formatted HTML summary as a Note to HubSpot
